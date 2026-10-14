@@ -3,7 +3,7 @@ pragma solidity ^0.8.26;
 
 import {ISP1Vector} from "./interfaces/ISP1Vector.sol";
 import {TimelockedUpgradeable} from "@succinctx/upgrades/TimelockedUpgradeable.sol";
-import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
+import {IZiskVerifier} from "./interfaces/IZiskVerifier.sol";
 
 /// @notice SP1Vector is a light client for Avail's consensus.
 /// @dev The light client tracks both the state of Avail's Grandpa consensus and Vector, Avail's
@@ -11,6 +11,9 @@ import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 /// @dev Ensure that all new storage variables are placed after existing storage variables to avoid
 /// storage corruption during upgrades.
 contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
+    uint256 private constant ZISK_PUBLIC_VALUES_LENGTH = 512;
+    uint256 private constant PROOF_OUTPUT_LENGTH = 576;
+
     /// @notice Indicator of if the contract is frozen.
     bool public frozen;
 
@@ -53,11 +56,11 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
     /// @notice The commitment tree size for the header range.
     uint32 public headerRangeCommitmentTreeSize;
 
-    /// @notice The verification key for the SP1Vector program.
+    /// @notice The verification key for the ZisK Vector program.
     bytes32 public vectorXProgramVkey;
 
-    /// @notice The deployed SP1 verifier contract.
-    ISP1Verifier public verifier;
+    /// @notice The deployed ZisK verifier contract.
+    IZiskVerifier public verifier;
 
     /// @notice Approved relayers for the contract.
     mapping(address => bool) public approvedRelayers;
@@ -126,18 +129,18 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
         latestAuthoritySetId = _params.authoritySetId;
         latestBlock = _params.height;
         vectorXProgramVkey = _params.vectorProgramVkey;
-        verifier = ISP1Verifier(_params.verifier);
+        verifier = IZiskVerifier(_params.verifier);
         headerRangeCommitmentTreeSize = _params.headerRangeCommitmentTreeSize;
 
         __TimelockedUpgradeable_init(_params.guardian, _params.guardian);
     }
 
-    /// @notice Update the SP1 verifier.
+    /// @notice Update the ZisK verifier.
     function updateVerifier(address _verifier) external onlyGuardian {
-        verifier = ISP1Verifier(_verifier);
+        verifier = IZiskVerifier(_verifier);
     }
 
-    /// @notice Update the SP1Vector program verification key.
+    /// @notice Update the ZisK Vector program verification key.
     function updateVectorXProgramVkey(bytes32 _vectorXProgramVkey) external onlyGuardian {
         vectorXProgramVkey = _vectorXProgramVkey;
     }
@@ -232,17 +235,21 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
     }
 
     /// @notice Add target header hash, and data + state commitments for (latestBlock, targetBlock].
-    /// @param proof The proof bytes for the SP1 proof.
-    /// @param publicValues The public commitments from the SP1 proof.
+    /// @param proof The ZisK PLONK proof bytes.
+    /// @param publicValues The ZisK public commitments.
+    /// @param proofOutput The ABI-encoded Vector claim bound by the public commitment.
     /// @dev The trusted block and requested block must have the same authority set id. If the target
     /// block is greater than the max batch size of the circuit, the proof will fail to generate.
-    function commitHeaderRange(bytes calldata proof, bytes calldata publicValues) external onlyApprovedRelayer {
+    function commitHeaderRange(bytes calldata proof, bytes calldata publicValues, bytes calldata proofOutput)
+        external
+        onlyApprovedRelayer
+    {
         if (frozen) {
             revert ContractFrozen();
         }
 
         // Parse the outputs from the committed public values associated with the proof.
-        ProofOutputs memory proofOutputs = abi.decode(publicValues, (ProofOutputs));
+        ProofOutputs memory proofOutputs = abi.decode(proofOutput, (ProofOutputs));
 
         // Assert this is a header range proof. Sanity check to prevent accidental submission of a
         // rotate proof.
@@ -263,7 +270,7 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
         if (storedTrustedHeader == bytes32(0)) {
             revert TrustedHeaderNotFound();
         }
-        if (hro.trusted_header_hash != storedTrustedHeader && hro.trusted_block != latestBlock) {
+        if (hro.trusted_header_hash != storedTrustedHeader || hro.trusted_block != latestBlock) {
             revert TrustedHeaderMismatch();
         }
 
@@ -288,7 +295,7 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
         }
 
         // Verify the proof with the associated public values. This will revert if proof invalid.
-        verifier.verifyProof(vectorXProgramVkey, publicValues, proof);
+        _verifyProof(proof, publicValues, proofOutput);
 
         emit HeadUpdate(hro.target_block, hro.target_header_hash);
         emit HeaderRangeCommitmentStored(
@@ -319,15 +326,19 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
     }
 
     /// @notice Adds the authority set hash for the next authority set id.
-    /// @param proof The proof bytes for the SP1 proof.
-    /// @param publicValues The public commitments from the SP1 proof.
-    function rotate(bytes calldata proof, bytes calldata publicValues) external onlyApprovedRelayer {
+    /// @param proof The ZisK PLONK proof bytes.
+    /// @param publicValues The ZisK public commitments.
+    /// @param proofOutput The ABI-encoded Vector claim bound by the public commitment.
+    function rotate(bytes calldata proof, bytes calldata publicValues, bytes calldata proofOutput)
+        external
+        onlyApprovedRelayer
+    {
         if (frozen) {
             revert ContractFrozen();
         }
 
         // Parse the outputs from the committed public values associated with the proof.
-        ProofOutputs memory proofOutputs = abi.decode(publicValues, (ProofOutputs));
+        ProofOutputs memory proofOutputs = abi.decode(proofOutput, (ProofOutputs));
 
         // Assert this is a rotate proof.
         if (proofOutputs.proofType != ProofType.RotateProof) {
@@ -353,11 +364,31 @@ contract SP1Vector is ISP1Vector, TimelockedUpgradeable {
         }
 
         // Verify the proof with the associated public values.
-        verifier.verifyProof(vectorXProgramVkey, publicValues, proof);
+        _verifyProof(proof, publicValues, proofOutput);
 
         emit AuthoritySetStored(ro.current_authority_set_id + 1, ro.new_authority_set_hash);
 
         // Store the authority set hash for the next authority set id.
         authoritySetIdToHash[ro.current_authority_set_id + 1] = ro.new_authority_set_hash;
+    }
+
+    function _verifyProof(bytes calldata proof, bytes calldata publicValues, bytes calldata proofOutput)
+        internal
+        view
+    {
+        if (publicValues.length != ZISK_PUBLIC_VALUES_LENGTH || proofOutput.length != PROOF_OUTPUT_LENGTH) {
+            revert InvalidPublicValues();
+        }
+
+        bytes32 digest = sha256(proofOutput);
+        bytes memory expectedPublicValues = new bytes(ZISK_PUBLIC_VALUES_LENGTH);
+        for (uint256 i; i < 32; ++i) {
+            expectedPublicValues[(i / 4) * 8 + (i % 4)] = digest[i];
+        }
+        if (keccak256(expectedPublicValues) != keccak256(publicValues)) {
+            revert InvalidPublicValues();
+        }
+
+        verifier.verifySnarkProof(vectorXProgramVkey, verifier.getRootCVadcopFinal(), publicValues, proof);
     }
 }

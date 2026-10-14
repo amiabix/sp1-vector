@@ -6,8 +6,6 @@ import {Vm} from "forge-std/Vm.sol";
 import {StdAssertions} from "forge-std/StdAssertions.sol";
 import {Script} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
-import {SP1MockVerifier} from "@sp1-contracts/SP1MockVerifier.sol";
-import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 import {SP1Vector} from "../src/SP1Vector.sol";
 import {TimelockedUpgradeable} from "@succinctx/upgrades/TimelockedUpgradeable.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
@@ -25,7 +23,7 @@ contract UpgradeScript is BaseScript {
 
     string internal constant KEY = "GuardianScript";
 
-    /// Reads CONTRACT_ADDRESS_<CHAIN_ID> from the environment variables and updates the SP1 Verifier and program vkey.
+    /// Reads CONTRACT_ADDRESS_<CHAIN_ID> and updates guardian roles.
     function run() external multichain(KEY) broadcaster {
         string memory contractAddressKey = string.concat("CONTRACT_ADDRESS_", vm.toString(block.chainid));
         address existingProxyAddress = vm.envAddress(contractAddressKey);

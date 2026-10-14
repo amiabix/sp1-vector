@@ -63,6 +63,9 @@ interface ISP1Vector {
     /// @notice The proof type is not HeaderRangeProof or RotateProof.
     error InvalidProofType();
 
+    /// @notice ZisK public values do not commit to the supplied proof output.
+    error InvalidPublicValues();
+
     /// @notice The merkle tree size does not match the expected size.
     error InvalidMerkleTreeSize();
 

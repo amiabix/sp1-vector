@@ -6,8 +6,6 @@ import {Vm} from "forge-std/Vm.sol";
 import {StdAssertions} from "forge-std/StdAssertions.sol";
 import {Script} from "forge-std/Script.sol";
 import {stdJson} from "forge-std/StdJson.sol";
-import {SP1MockVerifier} from "@sp1-contracts/SP1MockVerifier.sol";
-import {ISP1Verifier} from "@sp1-contracts/ISP1Verifier.sol";
 import {SP1Vector} from "../src/SP1Vector.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
@@ -19,10 +17,10 @@ import {BaseScript} from "./Base.s.sol";
 // - GENESIS_AUTHORITY_SET_ID
 // - GENESIS_AUTHORITY_SET_HASH
 // - HEADER_RANGE_COMMITMENT_TREE_SIZE
-// - SP1_VECTOR_PROGRAM_VKEY
+// - ZISK_VECTOR_PROGRAM_VKEY
 // - CREATE2_SALT
 // - GUARDIAN_ADDRESS
-// - SP1_VERIFIER_ADDRESS
+// - ZISK_VERIFIER_ADDRESS
 
 contract DeployScript is BaseScript {
     using stdJson for string;
@@ -41,13 +39,12 @@ contract DeployScript is BaseScript {
         uint64 genesisAuthoritySetId = uint64(vm.envUint("GENESIS_AUTHORITY_SET_ID"));
         bytes32 genesisAuthoritySetHash = vm.envBytes32("GENESIS_AUTHORITY_SET_HASH");
         uint32 headerRangeCommitmentTreeSize = uint32(vm.envUint("HEADER_RANGE_COMMITMENT_TREE_SIZE"));
-        bytes32 vectorProgramVkey = vm.envBytes32("SP1_VECTOR_PROGRAM_VKEY");
-        address verifierAddress = vm.envAddress("SP1_VERIFIER_ADDRESS");
+        bytes32 vectorProgramVkey = vm.envBytes32("ZISK_VECTOR_PROGRAM_VKEY");
+        address verifierAddress = vm.envAddress("ZISK_VERIFIER_ADDRESS");
 
         // Read trusted initialization parameters from environment.
         address guardian = vm.envOr("GUARDIAN_ADDRESS", msg.sender);
 
-        ISP1Verifier verifier = ISP1Verifier(verifierAddress);
         SP1Vector sp1VectorImpl = SP1Vector(new SP1Vector());
         //ERC1967Proxy proxy = new ERC1967Proxy{salt: vm.envBytes32("CREATE2_SALT")}(address(sp1VectorImpl), "");
         ERC1967Proxy proxy = new ERC1967Proxy(address(sp1VectorImpl), "");
@@ -61,7 +58,7 @@ contract DeployScript is BaseScript {
                 authoritySetHash: genesisAuthoritySetHash,
                 headerRangeCommitmentTreeSize: headerRangeCommitmentTreeSize,
                 vectorProgramVkey: vectorProgramVkey,
-                verifier: address(verifier)
+                verifier: verifierAddress
             })
         );
 

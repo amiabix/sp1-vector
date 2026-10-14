@@ -7,13 +7,14 @@ import "forge-std/Script.sol";
 
 // Required environment variables:
 // - CONTRACT_ADDRESS_{CHAIN_ID}
+// - ZISK_VECTOR_PROGRAM_VKEY
 
 contract UpdateVkeySingleScript is Script {
     using stdJson for string;
 
     function setUp() public {}
 
-    /// Reads CONTRACT_ADDRESS_<CHAIN_ID> from the environment variables and updates the SP1 Verifier and program vkey.
+    /// Updates the ZisK program verification key.
     function run() external {
         vm.startBroadcast();
 
@@ -22,8 +23,7 @@ contract UpdateVkeySingleScript is Script {
 
         SP1Vector sp1Vector = SP1Vector(address(existingProxyAddress));
 
-        // v4 program vkey
-        sp1Vector.updateVectorXProgramVkey(0x0057b7de6dcd8ff25e7b41089f4b5fa586067fbb107756d1f66d92fe71dd6ad1);
+        sp1Vector.updateVectorXProgramVkey(vm.envBytes32("ZISK_VECTOR_PROGRAM_VKEY"));
 
         vm.stopBroadcast();
     }
