@@ -1,80 +1,11 @@
 # Deployment
 
-## Overview
+1. Build and compare the guest ELF as described in [Reproducible Builds](reproducible-builds.md). Run `cargo run --release --bin vkey` and record its `VK` output.
+2. Deploy the [ZisK PLONK verifier](https://github.com/0xPolygonHermez/zisk/tree/v1.3.2-alpha/zisk-contracts) for the proving-key release used by the operator. Confirm that it exposes `verifySnarkProof` and `getRootCVadcopFinal`, and record its address. A verifier from a different proving-key release can reject valid proofs.
+3. Generate the Avail genesis values with `AVAIL_URL=<Avail RPC> cargo run --release --bin genesis`. Put those values, `ZISK_VECTOR_PROGRAM_VKEY=<VK>`, and `ZISK_VERIFIER_ADDRESS=<verifier address>` in `contracts/.env` alongside the target chain settings from `.env.example`.
+4. From `contracts/`, run `forge script script/Deploy.s.sol --private-key "$PRIVATE_KEY" --multi --broadcast --verify` with `CHAINS` set. For an existing proxy, use `Upgrade.s.sol`; it freezes the proxy, upgrades it, sets the verifier and key, and unfreezes it in one broadcast script. Review the existing guardian and relayer settings first.
+5. Run the operator on a Linux host with the matching ZisK proving keys and GPU toolchain, or set `ZISK_COORDINATOR_URL` for a compatible remote coordinator. Set the Avail RPC, `AVAIL_CHAIN_ID`, `VECTORX_QUERY_URL`, target chain RPC and contract address, and relayer signer values from `script/.env.example`; then run `cargo run --release --bin operator` on the host or start the operator image.
 
-Here's how to deploy an SP1 Vector contract for an Avail chain.
+The operator verifies PLONK proofs locally before relaying. A host installation needs `snarkjs@0.7.5` on `PATH` (`npm install --global snarkjs@0.7.5`). The release operator image includes Node and `snarkjs`; set `ZISK_COORDINATOR_URL` when using that image unless the container has the GPU toolchain and proving keys.
 
-## Steps
-
-1. To deploy an SP1 Vector contract for an Avail chain do the following.
-
-    Get the genesis parameters for the `SP1Vector` contract.
-
-    ```shell
-    cd script
-
-    # Example with Avail Turing Testnet.
-    AVAIL_URL=wss://turing-rpc.avail.so/ws cargo run --bin genesis --release
-    ```
-
-2. Add the genesis parameters to `/contracts/.env` mirroring `contracts/.env.example`.
-
-    | Parameter | Description |
-    |-----------|-------------|
-    | GENESIS_HEIGHT | The block height of the genesis block for the Avail chain |
-    | GENESIS_HEADER | The header of the genesis block for the Avail chain |
-    | GENESIS_AUTHORITY_SET_ID | The ID of the initial authority set for the Avail chain |
-    | GENESIS_AUTHORITY_SET_HASH | The hash of the initial authority set for the Avail chain |
-    | SP1_VECTOR_PROGRAM_VKEY | The verification key for the SP1 Vector program |
-    | HEADER_RANGE_COMMITMENT_TREE_SIZE | The size of the Merkle tree used for header range commitments (Default 1024) |
-
-
-3. Deploy the `SP1Vector` contract with genesis parameters.
-    ```shell
-    cd ../contracts
-
-    forge install
-
-    SP1_PROVER={mock, network} CHAINS=sepolia forge script script/Deploy.s.sol --private-key $PRIVATE_KEY --multi --broadcast --verify
-    ```
-
-    If you see the following error, add `--legacy` to the command.
-    ```shell
-    Error: Failed to get EIP-1559 fees    
-    ```
-3. Your deployed contract address will be printed to the terminal.
-
-    ```shell
-    == Return ==
-    0: address <SP1_VECTOR_ADDRESS>
-    ```
-
-    This will be used when you run the operator in step 5.
-
-4. Export your SP1 Prover Network configuration
-
-    ```shell
-    # Export the PRIVATE_KEY you will use to relay proofs.
-    export PRIVATE_KEY=<PRIVATE_KEY>
-
-    # Optional
-    # If you're generating proofs on the Succinct Network, set NETWORK_PRIVATE_KEY to the private key of the account you want to use.
-    export NETWORK_PRIVATE_KEY=<NETWORK_PRIVATE_KEY>
-    # If you're using a custom endpoint, set NETWORK_RPC_URL to the URL of the endpoint you want to use.
-    export NETWORK_RPC_URL=<NETWORK_RPC_URL>
-    # If you're generating proofs in mock mode, set SP1_PROVER to "mock".
-    export SP1_PROVER={mock}
-    ```
-
-5. Run the SP1 Vector operator to update the LC continuously.
-
-    ```
-    cd ../script
-
-    AVAIL_URL=wss://turing-rpc.avail.so/ws AVAIL_CHAIN_ID=turing CHAIN_ID=11155111 RPC_URL=https://ethereum-sepolia.publicnode.com/ CONTRACT_ADDRESS=<SP1_VECTOR_ADDRESS> VECTORX_QUERY_URL=https://vectorx-query.succinct.xyz
-    cargo run --bin operator --release
-    ```
-
-## Demo Contract
-
-An example contract using SP1 Vector can be found on Sepolia [here](https://sepolia.etherscan.io/address/0x04819f50EE813a8f6F6ba28288551c4339fDC881).
+The operator sends PLONK proof bytes, ZisK public values, and the ABI-encoded Vector output. The contract verifies that the output's digest is bound to the proof before accepting the state transition.

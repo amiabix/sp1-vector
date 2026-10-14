@@ -3,13 +3,13 @@ authors = ["Ratan Kaliani"]
 language = "en"
 multilingual = false
 src = "book"
-title = "SP1 Vector Documentation"
+title = "ZisK Vector Documentation"
 
 [build]
 build-dir = "target/book"
 
 [output.html]
-git-repository-url = "https://github.com/succinctlabs/sp1-vector"
+git-repository-url = "https://github.com/availproject/sp1-vector"
 git-repository-icon = "fa-github"
 additional-js = ["book/mermaid/mermaid.min.js", "book/mermaid/mermaid-init.js"]
 

@@ -1,10 +1,10 @@
-# SP1 Vector
+# ZisK Vector
 
 ## Overview
 
-Implementation of zero-knowledge proof circuits for [Vector](https://blog.availproject.org/data-attestation-bridge/), Avail's Data Attestation Bridge in SP1.
+Implementation of zero-knowledge proofs for [Vector](https://blog.availproject.org/data-attestation-bridge/), Avail's Data Attestation Bridge, in ZisK.
 
-- `/program`: The SP1 Vector program.
+- `/program`: The ZisK guest program.
 - `/primitives`: Libraries for types and helper functions used in the program.
 - `/script`: Scripts for getting the contract's genesis parameters and deploying the operator to 
     update the light client.
