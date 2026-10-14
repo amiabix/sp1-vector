@@ -1,12 +1,19 @@
 name: test
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
 
 env:
   FOUNDRY_PROFILE: ci
 
 jobs:
   check:
+    defaults:
+      run:
+        working-directory: contracts
     strategy:
       fail-fast: true
 

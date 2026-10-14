@@ -35,6 +35,12 @@ jobs:
         env:
           CARGO_INCREMENTAL: 1
 
+      - name: Test guest primitives
+        run: cargo test -p sp1-vector-primitives --locked
+
+      - name: Execute saved guest inputs
+        run: cargo test -p sp1-vectorx-script --lib saved_inputs_execute_with_current_guest --locked
+
   elf:
     # Self-hosted runner: skip fork PRs (untrusted code); allow same-repo PRs, push, merge_group.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -42,22 +48,19 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-      # SP1 toolchain (cargo-prove) is pre-installed on the self-hosted runner.
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Verify the SP1 Vector Binary
+      - name: Install ZisK guest builder
+        env:
+          ZISK_HOME: ${{ runner.temp }}/zisk-vector
+          RUSTUP_HOME: ${{ runner.temp }}/zisk-rustup
         run: |
-          # Build the binaries
+          mkdir -p "$ZISK_HOME"
+          curl -fsSL https://github.com/0xPolygonHermez/zisk/releases/download/v1.3.2-alpha/cargo_zisk_linux_amd64.tar.gz | tar -xz -C "$ZISK_HOME"
+          "$ZISK_HOME/bin/cargo-zisk-cpu" toolchain install --toolchain-version zisk-4.0.0
+      - name: Verify the ZisK Vector binary
+        env:
+          ZISK_HOME: ${{ runner.temp }}/zisk-vector
+          RUSTUP_HOME: ${{ runner.temp }}/zisk-rustup
+        run: |
           cd program
-          cargo-prove prove build --elf-name vector-elf --docker --tag v6.3.1 --output-directory ../elf
-          cd ../
-          # Check for any changes in the elf directory
-          if [ -n "$(git status --porcelain elf/)" ]; then
-            echo "❌ ELF files changed during build!"
-            git diff elf/
-            exit 1
-          else
-            echo "✅ ELF files remained unchanged"
-          fi
+          "$ZISK_HOME/bin/cargo-zisk-cpu" build --release
+          cmp target/elf/riscv64ima-zisk-zkvm-elf/release/sp1-vectorx-program ../elf/vector-elf
