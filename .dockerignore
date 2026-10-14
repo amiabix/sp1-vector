@@ -1,0 +1,5 @@
+.git
+target
+**/target
+.env*
+**/.env*
