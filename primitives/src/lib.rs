@@ -1,10 +1,5 @@
 use alloy_primitives::B256;
-use blake2::{
-    digest::{Update, VariableOutput},
-    Blake2bVar,
-};
 use codec::{Compact, Decode, Encode};
-use sha2::{Digest as Sha256Digest, Sha256};
 
 pub mod consts;
 pub mod header_range;
@@ -12,30 +7,28 @@ mod justification;
 pub mod merkle;
 pub mod rotate;
 pub mod types;
+mod zisk_blake2b;
+mod zisk_sha256;
+
+pub use zisk_sha256::sha256_hash;
 
 pub use justification::verify_justification;
 
 /// Blake2B hash of an encoded header. Note: This is a generic hash fn for any data.
 pub(crate) fn hash_encoded_header(encoded_header: &[u8]) -> B256 {
-    const DIGEST_SIZE: usize = 32;
-    let mut hasher = Blake2bVar::new(DIGEST_SIZE).unwrap();
-    hasher.update(encoded_header);
-
-    let mut digest_bytes = [0u8; DIGEST_SIZE];
-    let _ = hasher.finalize_variable(&mut digest_bytes);
-    B256::from(digest_bytes)
+    B256::from(zisk_blake2b::blake2b_256(encoded_header))
 }
 
 /// Compute the new authority set hash from the encoded pubkeys.
 pub fn compute_authority_set_commitment(pubkeys: &[B256]) -> B256 {
-    let mut commitment_so_far = Sha256::digest(pubkeys[0]).to_vec();
+    let mut commitment_so_far = sha256_hash(pubkeys[0].as_slice());
     for pubkey in pubkeys.iter().skip(1) {
-        let mut input_to_hash = Vec::new();
-        input_to_hash.extend_from_slice(&commitment_so_far);
-        input_to_hash.extend_from_slice(pubkey.as_slice());
-        commitment_so_far = Sha256::digest(&input_to_hash).to_vec();
+        let mut input = [0u8; 64];
+        input[..32].copy_from_slice(&commitment_so_far);
+        input[32..].copy_from_slice(pubkey.as_slice());
+        commitment_so_far = sha256_hash(&input);
     }
-    B256::from_slice(&commitment_so_far)
+    B256::from(commitment_so_far)
 }
 
 /// Decode a SCALE-encoded compact int and get the value and the number of bytes it took to encode.
@@ -56,6 +49,7 @@ mod tests {
     use avail_subxt::KateCommitment;
     use avail_subxt::H256;
     use codec::{Compact, Encode};
+    use sha2::{Digest as Sha256Digest, Sha256};
 
     #[test]
     fn test_decode_scale_compact_int() {
@@ -109,5 +103,24 @@ mod tests {
         let n: [u8; 32] = encoded[0..32].try_into().unwrap();
         let extracted_hash = H256::from(n);
         assert_eq!(extracted_hash, hash, "Hashes don't match")
+    }
+
+    #[test]
+    fn proof_output_encoding_binds_type_and_payload() {
+        use crate::consts::{HEADER_OUTPUTS_LENGTH, PROOF_OUTPUT_LENGTH, ROTATE_OUTPUTS_LENGTH};
+        use crate::types::{encode_proof_output, ProofType};
+
+        let header = [0u8; HEADER_OUTPUTS_LENGTH];
+        let rotate = [0u8; ROTATE_OUTPUTS_LENGTH];
+        let range = encode_proof_output(ProofType::HeaderRangeProof, header, rotate);
+        let rotation = encode_proof_output(ProofType::RotateProof, header, rotate);
+
+        assert_eq!(range.len(), PROOF_OUTPUT_LENGTH);
+        assert_ne!(Sha256::digest(&range), Sha256::digest(&rotation));
+
+        let mut changed_header = header;
+        changed_header[0] = 1;
+        let changed = encode_proof_output(ProofType::HeaderRangeProof, changed_header, rotate);
+        assert_ne!(Sha256::digest(&range), Sha256::digest(&changed));
     }
 }

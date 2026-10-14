@@ -17,4 +17,4 @@ pub const HEADER_OUTPUTS_LENGTH: usize = 32 * 9;
 pub const ROTATE_OUTPUTS_LENGTH: usize = 32 * 3;
 
 // ABI-encoded length of final proof output.
-pub const PROOF_OUTPUT_LENGTH: usize = 544;
+pub const PROOF_OUTPUT_LENGTH: usize = 576;

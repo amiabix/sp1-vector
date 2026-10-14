@@ -1,5 +1,7 @@
 use alloy_primitives::{B256, B512};
-use alloy_sol_types::sol;
+use alloy_sol_types::{sol, SolType};
+
+use crate::consts::{HEADER_OUTPUTS_LENGTH, ROTATE_OUTPUTS_LENGTH};
 
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +32,15 @@ pub type ProofOutput = sol! {
     tuple(uint8, bytes, bytes)
 };
 
-#[derive(Debug, Deserialize, Serialize)]
+pub fn encode_proof_output(
+    proof_type: ProofType,
+    header_range_outputs: [u8; HEADER_OUTPUTS_LENGTH],
+    rotate_outputs: [u8; ROTATE_OUTPUTS_LENGTH],
+) -> Vec<u8> {
+    ProofOutput::abi_encode(&(proof_type as u8, header_range_outputs, rotate_outputs))
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy)]
 pub enum ProofType {
     HeaderRangeProof = 0,
     RotateProof = 1,
@@ -59,7 +69,7 @@ pub struct RotateInputs {
 pub struct HeaderRotateData {
     /// Encoded header bytes for the epoch end block.
     pub header_bytes: Vec<u8>,
-    /// Index of the new authority set data in the header bytes.
+    /// Byte before the selected GRANDPA consensus digest item.
     pub consensus_log_position: usize,
 }
 
@@ -94,7 +104,7 @@ pub struct CircuitJustification {
     pub ancestries_encoded: Vec<Vec<u8>>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct HeaderRangeInputs {
     pub merkle_tree_size: usize,
     pub encoded_headers: Vec<Vec<u8>>,

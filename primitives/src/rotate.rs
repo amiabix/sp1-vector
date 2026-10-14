@@ -1,12 +1,13 @@
 use crate::{
     compute_authority_set_commitment,
-    consts::{PUBKEY_LENGTH, ROTATE_OUTPUTS_LENGTH, VALIDATOR_LENGTH},
-    decode_scale_compact_int, hash_encoded_header,
+    consts::ROTATE_OUTPUTS_LENGTH,
+    hash_encoded_header,
     types::{RotateInputs, RotateOutputs},
     verify_justification,
 };
 use alloy_primitives::B256;
 use alloy_sol_types::SolType;
+use codec::{Compact, Decode};
 
 /// Verify the justification from the current authority set on the epoch end header and return the next
 /// authority set commitment.
@@ -42,71 +43,107 @@ pub fn verify_rotate(rotate_inputs: RotateInputs) -> [u8; ROTATE_OUTPUTS_LENGTH]
     .unwrap()
 }
 
-/// Extract the public keys of the next validator set from the epoch end header.
-///
-/// 1. Verify the epoch end header's consensus log is formatted correctly before the next authority set hash bytes.
-/// 2. Extract the public keys from the epoch end header. All validator voting weights are 1. The public
-///    keys are encoded as 40 bytes: 32 bytes for the pubkey and 8 bytes for the voting weight.
-/// 3. Assert the delay is 0.
+/// Extract the scheduled GRANDPA change from a SCALE-encoded Avail header.
 pub fn get_next_validator_pubkeys_from_epoch_end_header(
     header_bytes: &[u8],
-    mut cursor: usize,
+    consensus_log_position: usize,
 ) -> Vec<B256> {
-    // Verify consensus flag is 4.
-    assert_eq!(header_bytes[cursor + 1], 4u8);
+    let mut cursor = header_bytes.get(32..).expect("Missing header number");
+    Compact::<u32>::decode(&mut cursor).expect("Invalid header number");
+    cursor = cursor.get(64..).expect("Missing header roots");
+    let log_count = Compact::<u32>::decode(&mut cursor)
+        .expect("Invalid digest length")
+        .0;
 
-    // Verify the consensus engine ID: 0x46524e4b [70, 82, 78, 75]
-    // Consensus Id: https://github.com/availproject/avail/blob/188c20d6a1577670da65e0c6e1c2a38bea8239bb/avail-subxt/examples/download_digest_items.rs#L41-L56
-    assert_eq!(
-        header_bytes[cursor + 2..cursor + 6],
-        [70u8, 82u8, 78u8, 75u8]
-    );
+    for _ in 0..log_count {
+        let item_start = header_bytes.len() - cursor.len();
+        let variant = u8::decode(&mut cursor).expect("Missing digest item");
+        let consensus = match variant {
+            0 => {
+                Vec::<u8>::decode(&mut cursor).expect("Invalid Other digest");
+                None
+            }
+            4..=6 => {
+                let engine = <[u8; 4]>::decode(&mut cursor).expect("Missing consensus ID");
+                let data = Vec::<u8>::decode(&mut cursor).expect("Invalid consensus data");
+                (variant == 4).then_some((engine, data))
+            }
+            8 => None,
+            _ => panic!("Unknown digest item"),
+        };
 
-    // Move past the consensus engine ID.
-    cursor += 6;
+        if consensus_log_position.checked_add(1) != Some(item_start) {
+            continue;
+        }
+        let (engine, data) = consensus.expect("Selected digest item is not a consensus log");
+        assert_eq!(engine, *b"FRNK");
+        let mut data = data.as_slice();
+        assert_eq!(u8::decode(&mut data).expect("Missing GRANDPA log type"), 1);
+        let authority_count = Compact::<u32>::decode(&mut data)
+            .expect("Invalid authority count")
+            .0 as usize;
+        assert!(authority_count > 0 && authority_count <= data.len() / 40);
+        let mut pubkeys = Vec::with_capacity(authority_count);
+        for _ in 0..authority_count {
+            let pubkey = <[u8; 32]>::decode(&mut data).expect("Missing authority public key");
+            assert_eq!(u64::decode(&mut data).expect("Missing authority weight"), 1);
+            pubkeys.push(B256::from(pubkey));
+        }
+        assert_eq!(u32::decode(&mut data).expect("Missing change delay"), 0);
+        assert!(data.is_empty(), "Trailing GRANDPA log data");
+        return pubkeys;
+    }
+    panic!("Selected GRANDPA consensus log is not a digest item")
+}
 
-    // Decode the encoded scheduled change message length.
-    let (_, decoded_byte_length) =
-        decode_scale_compact_int(header_bytes[cursor..cursor + 5].to_vec());
+#[cfg(test)]
+mod tests {
+    use super::get_next_validator_pubkeys_from_epoch_end_header;
+    use alloy_primitives::B256;
+    use avail_subxt::ext::subxt_core::config::substrate::DigestItem;
+    use codec::{Compact, Encode};
 
-    // Move past the encoded scheduled change message length.
-    cursor += decoded_byte_length;
+    fn scheduled_change() -> Vec<u8> {
+        let mut data = vec![1, 4]; // ScheduledChange with one authority.
+        data.extend([7u8; 32]);
+        data.extend(1u64.to_le_bytes());
+        data.extend(0u32.to_le_bytes());
+        data
+    }
 
-    // Verify the next byte after encoded scheduled change message is the ScheduledChange enum flag.
-    assert_eq!(header_bytes[cursor], 1u8);
+    fn header_with_logs(logs: Vec<DigestItem>) -> Vec<u8> {
+        let mut header = vec![0u8; 32];
+        header.extend(Compact(1u32).encode());
+        header.extend([0u8; 64]);
+        header.extend(logs.encode());
+        header
+    }
 
-    // Move past the ScheduledChange enum flag.
-    cursor += 1;
+    #[test]
+    #[should_panic(expected = "Selected GRANDPA consensus log is not a digest item")]
+    fn rejects_scheduled_change_bytes_inside_other_digest_item() {
+        let fake_log = DigestItem::Consensus(*b"FRNK", scheduled_change()).encode();
+        let mut payload = vec![0u8];
+        payload.extend(fake_log);
+        let header = header_with_logs(vec![DigestItem::Other(payload)]);
+        let offset = header
+            .windows(6)
+            .position(|bytes| bytes == [0, 4, b'F', b'R', b'N', b'K'])
+            .unwrap();
+        get_next_validator_pubkeys_from_epoch_end_header(&header, offset);
+    }
 
-    // Decoded the encoded authority set size.
-    let (authority_set_size, decoded_byte_length) =
-        decode_scale_compact_int(header_bytes[cursor..cursor + 5].to_vec());
-
-    // Move past the encoded authority set size.
-    cursor += decoded_byte_length;
-
-    // Extract the public keys from the epoch end header.
-    let extracted_pubkeys: Vec<B256> = (0..authority_set_size as usize)
-        .map(|i| {
-            let start = cursor + (i * VALIDATOR_LENGTH);
-            let pubkey = B256::from_slice(&header_bytes[start..start + PUBKEY_LENGTH]);
-
-            // All validator voting weights in Avail are 1.
-            assert_eq!(
-                &header_bytes[start + PUBKEY_LENGTH..start + VALIDATOR_LENGTH],
-                &[1u8, 0, 0, 0, 0, 0, 0, 0]
-            );
-
-            pubkey
-        })
-        .collect();
-
-    // Assert the delay is 0.
-    let delay_start = cursor + (authority_set_size as usize * VALIDATOR_LENGTH);
-    assert_eq!(
-        &header_bytes[delay_start..delay_start + 4],
-        &[0u8, 0u8, 0u8, 0u8]
-    );
-
-    extracted_pubkeys
+    #[test]
+    fn accepts_scheduled_change_after_another_digest_item() {
+        let other = DigestItem::Other(vec![9]);
+        let header = header_with_logs(vec![
+            other.clone(),
+            DigestItem::Consensus(*b"FRNK", scheduled_change()),
+        ]);
+        let offset = 32 + Compact(1u32).encode().len() + 64 + 1 + other.encode().len() - 1;
+        assert_eq!(
+            get_next_validator_pubkeys_from_epoch_end_header(&header, offset),
+            vec![B256::from([7u8; 32])]
+        );
+    }
 }

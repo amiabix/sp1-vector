@@ -1,5 +1,4 @@
-use sha2::{Digest, Sha256};
-
+use crate::sha256_hash;
 use crate::types::DecodedHeaderData;
 use alloy_primitives::B256;
 
@@ -22,10 +21,10 @@ fn get_merkle_root(leaves: Vec<B256>) -> B256 {
     while nodes.len() > 1 {
         nodes = (0..nodes.len() / 2)
             .map(|i| {
-                let mut hasher = Sha256::new();
-                hasher.update(nodes[2 * i]);
-                hasher.update(nodes[2 * i + 1]);
-                B256::from_slice(&hasher.finalize())
+                let mut input = [0u8; 64];
+                input[..32].copy_from_slice(nodes[2 * i].as_slice());
+                input[32..].copy_from_slice(nodes[2 * i + 1].as_slice());
+                B256::from(sha256_hash(&input))
             })
             .collect();
     }

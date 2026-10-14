@@ -4,8 +4,7 @@
 //!
 use clap::Parser;
 use services::input::RpcDataFetcher;
-use sp1_sdk::{Elf, HashableKey, Prover, ProverClient, ProvingKey};
-use sp1_vectorx_script::SP1_VECTOR_ELF;
+use sp1_vectorx_script::{zisk_vector_program, zisk_vector_vkey};
 
 #[derive(Parser, Debug, Clone)]
 #[command(about = "Get the genesis parameters from a block.")]
@@ -19,12 +18,7 @@ const HEADER_RANGE_COMMITMENT_TREE_SIZE: u32 = 1024;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let fetcher = RpcDataFetcher::new().await;
-    let client = ProverClient::builder().mock().build().await;
-    let pk = client
-        .setup(Elf::Static(SP1_VECTOR_ELF))
-        .await
-        .expect("failed to setup prover");
-    let vk = pk.verifying_key();
+    let vk = zisk_vector_vkey(&zisk_vector_program())?;
 
     let args = GenesisArgs::parse();
 
@@ -45,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
         genesis_header: String,
         genesis_authority_set_id: u64,
         genesis_authority_set_hash: String,
-        sp1_vector_program_vkey: String,
+        zisk_vector_program_vkey: String,
         header_range_commitment_tree_size: u32,
     }
 
@@ -54,16 +48,16 @@ async fn main() -> anyhow::Result<()> {
         genesis_header: format!("{:#x}", header_hash),
         genesis_authority_set_id: authority_set_id,
         genesis_authority_set_hash: format!("{:#x}", authority_set_hash),
-        sp1_vector_program_vkey: vk.bytes32(),
+        zisk_vector_program_vkey: format!("{vk:#x}"),
         header_range_commitment_tree_size: HEADER_RANGE_COMMITMENT_TREE_SIZE,
     };
 
-    println!("GENESIS_HEIGHT={}\nGENESIS_HEADER={}\nGENESIS_AUTHORITY_SET_ID={}\nGENESIS_AUTHORITY_SET_HASH={}\nSP1_VECTOR_PROGRAM_VKEY={}\nHEADER_RANGE_COMMITMENT_TREE_SIZE={}",
+    println!("GENESIS_HEIGHT={}\nGENESIS_HEADER={}\nGENESIS_AUTHORITY_SET_ID={}\nGENESIS_AUTHORITY_SET_HASH={}\nZISK_VECTOR_PROGRAM_VKEY={}\nHEADER_RANGE_COMMITMENT_TREE_SIZE={}",
              output.genesis_height,
              output.genesis_header,
              output.genesis_authority_set_id,
              output.genesis_authority_set_hash,
-             output.sp1_vector_program_vkey,
+             output.zisk_vector_program_vkey,
              output.header_range_commitment_tree_size,
     );
 

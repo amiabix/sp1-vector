@@ -71,7 +71,7 @@ async fn get_receipts_for_chain(
     month: u32,
     year: i32,
 ) -> Result<Vec<RelayTransaction>> {
-    let provider = ProviderBuilder::new().on_http(Url::parse(rpc_url).unwrap());
+    let provider = ProviderBuilder::new().connect_http(Url::parse(rpc_url).unwrap());
     let chain_id = provider.get_chain_id().await?;
 
     let to_addr = get_contract_address(chain_id).expect("Chain ID not supported");
@@ -205,7 +205,7 @@ async fn main() -> Result<()> {
     let total = eth_total;
 
     println!(
-        "\n{} paid the following in SP1 Vector relaying fees in {}/{}:\n  Ethereum: {:.4} ETH\n  Total: {:.4} ETH",
+        "\n{} paid the following in Vector relaying fees in {}/{}:\n  Ethereum: {:.4} ETH\n  Total: {:.4} ETH",
         args.from_address, args.month, args.year, eth_total, total
     );
 

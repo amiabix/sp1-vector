@@ -18,19 +18,20 @@ use tokio::time::sleep;
 use anyhow::{bail, Context, Result};
 use services::input::{fetch_usd_rate, HeaderRangeRequestData, RpcDataFetcher};
 use services::Timeout;
-use sp1_sdk::env::{EnvProver, EnvProvingKey};
-use sp1_sdk::network::FulfillmentStrategy;
-use sp1_sdk::{
-    Elf, HashableKey, ProveRequest, Prover, ProverClient, ProvingKey, SP1ProofWithPublicValues,
-    SP1Stdin, SP1VerifyingKey,
+use sha2::{Digest, Sha256};
+use sp1_vector_primitives::{
+    consts::{HEADER_OUTPUTS_LENGTH, ROTATE_OUTPUTS_LENGTH},
+    header_range::verify_header_range,
+    rotate::verify_rotate,
+    types::{encode_proof_output, ProofType},
 };
-use sp1_vector_primitives::types::ProofType;
 use sp1_vectorx_script::relay::{self};
-use sp1_vectorx_script::SP1_VECTOR_ELF;
+use sp1_vectorx_script::{plonk_calldata, zisk_vector_program, zisk_vector_vkey};
 use tracing::level_filters::LevelFilter;
 use tracing::{debug, error, info, instrument, warn};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use zisk_sdk::{GuestProgram, ProofKind, ZiskClient, ZiskStdin};
 
 use config::{ChainConfig, SignerMode};
 
@@ -38,8 +39,7 @@ use config::{ChainConfig, SignerMode};
 // Constants
 ////////////////////////////////////////////////////////////
 
-// If the SP1 proof takes too long to respond, time out.
-// timeout available only for sp1 network
+// If the ZisK proof takes too long to respond, time out.
 const PROOF_TIMEOUT_SECS: u64 = 60 * 30;
 
 // If the operator takes too long to run, time out.
@@ -73,21 +73,27 @@ sol! {
         bytes32 public vectorXProgramVkey;
         address public verifier;
 
-        function rotate(bytes calldata proof, bytes calldata publicValues) external;
-        function commitHeaderRange(bytes calldata proof, bytes calldata publicValues) external;
+        function rotate(bytes calldata proof, bytes calldata publicValues, bytes calldata proofOutput) external;
+        function commitHeaderRange(bytes calldata proof, bytes calldata publicValues, bytes calldata proofOutput) external;
     }
 }
 
 type SP1VectorInstance<P, N> = SP1Vector::SP1VectorInstance<P, N>;
 
 struct SP1VectorOperator<P, N> {
-    pk: EnvProvingKey,
-    vk: SP1VerifyingKey,
+    program: GuestProgram,
+    vk: B256,
     signer_mode: SignerMode,
     tree_size: Option<u32>,
     fetcher: RpcDataFetcher,
-    prover: EnvProver,
+    prover: ZiskClient,
     contracts: HashMap<u64, SP1VectorInstance<P, N>>,
+}
+
+struct VectorProof {
+    proof_bytes: Vec<u8>,
+    public_values: Vec<u8>,
+    output: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -113,25 +119,30 @@ where
     P: Provider<N>,
     N: Network,
 {
-    async fn new(signer_mode: SignerMode) -> Self {
+    async fn new(signer_mode: SignerMode) -> Result<Self> {
         dotenv::dotenv().ok();
 
-        let prover = ProverClient::from_env().await;
-        let pk = prover
-            .setup(Elf::Static(SP1_VECTOR_ELF))
-            .await
-            .expect("failed to setup prover");
-        let vk = pk.verifying_key().clone();
+        let program = zisk_vector_program();
+        let prover = match env::var("ZISK_COORDINATOR_URL")
+            .ok()
+            .filter(|url| !url.is_empty())
+        {
+            Some(url) => ZiskClient::remote(url).build()?,
+            None => ZiskClient::embedded().assembly().gpu().plonk().build()?,
+        };
+        prover.upload(&program).run()?;
+        prover.setup(&program).run()?.await?;
+        let vk = zisk_vector_vkey(&program)?;
 
-        Self {
+        Ok(Self {
             fetcher: RpcDataFetcher::new().await,
-            pk,
+            program,
             vk,
             signer_mode,
             prover,
             contracts: HashMap::new(),
             tree_size: None,
-        }
+        })
     }
 
     /// Register a new chain with the operator.
@@ -183,15 +194,19 @@ where
         &self,
         tree_size: u32,
         header_range_request: HeaderRangeRequestData,
-    ) -> Result<SP1ProofWithPublicValues> {
-        let mut stdin: SP1Stdin = SP1Stdin::new();
-
+    ) -> Result<VectorProof> {
         let proof_type = ProofType::HeaderRangeProof;
         let header_range_inputs = self
             .fetcher
             .get_header_range_inputs(header_range_request, Some(tree_size))
             .await;
 
+        let output = encode_proof_output(
+            proof_type,
+            verify_header_range(header_range_inputs.clone()),
+            [0u8; ROTATE_OUTPUTS_LENGTH],
+        );
+        let stdin = ZiskStdin::new();
         stdin.write(&proof_type);
         stdin.write(&header_range_inputs);
 
@@ -200,45 +215,7 @@ where
             header_range_request.trusted_block, header_range_request.target_block
         );
 
-        // If the SP1_PROVER environment variable is set to "mock", use the mock prover.
-        let mock = env::var("SP1_PROVER")?.to_lowercase() == "mock";
-        let proof = if mock {
-            info!("Using mock proof to insert header range proof.");
-            let prover_client = ProverClient::builder().mock().build().await;
-            let mock_pk = prover_client
-                .setup(Elf::Static(SP1_VECTOR_ELF))
-                .await
-                .expect("failed to setup mock prover");
-            let proof = prover_client.prove(&mock_pk, stdin).plonk().await?;
-            Ok(proof)
-        } else {
-            let spn = env::var("SP1_PROVER")?.to_lowercase() == "network";
-            return if spn {
-                info!("Using spn proof to insert header range proof.");
-
-                let spn_client = ProverClient::builder().network().build().await;
-                let balance = spn_client.get_balance().await?;
-                info!(message = "Available balance", balance = balance.to_string());
-
-                let network_pk = spn_client
-                    .setup(Elf::Static(SP1_VECTOR_ELF))
-                    .await
-                    .expect("failed to setup network prover");
-                let proof = spn_client
-                    .prove(&network_pk, stdin)
-                    .strategy(FulfillmentStrategy::Auction)
-                    .min_auction_period(10)
-                    .plonk()
-                    .timeout(Duration::from_secs(PROOF_TIMEOUT_SECS))
-                    .await;
-                proof
-            } else {
-                info!("Using env defined client insert header range proof.");
-                let proof = self.prover.prove(&self.pk, stdin).plonk().await;
-                proof
-            };
-        };
-        proof
+        self.prove(stdin, output).await
     }
 
     // Ideally, post a header range update every ideal_block_interval blocks. Returns Option<(latest_block, block_to_step_to)>.
@@ -456,16 +433,18 @@ where
         })
     }
 
-    async fn request_rotate(
-        &self,
-        current_authority_set_id: u64,
-    ) -> Result<SP1ProofWithPublicValues> {
+    async fn request_rotate(&self, current_authority_set_id: u64) -> Result<VectorProof> {
         let fetcher = RpcDataFetcher::new().await;
 
-        let mut stdin: SP1Stdin = SP1Stdin::new();
+        let stdin = ZiskStdin::new();
 
         let proof_type = ProofType::RotateProof;
         let rotate_input = fetcher.get_rotate_inputs(current_authority_set_id).await;
+        let output = encode_proof_output(
+            proof_type,
+            [0u8; HEADER_OUTPUTS_LENGTH],
+            verify_rotate(rotate_input.clone()),
+        );
 
         stdin.write(&proof_type);
         stdin.write(&rotate_input);
@@ -475,53 +454,34 @@ where
             current_authority_set_id + 1
         );
 
-        // If the SP1_PROVER environment variable is set to "mock", use the mock prover.
-        let mock = env::var("SP1_PROVER")?.to_lowercase() == "mock";
-        let proof = if mock {
-            info!(
-                "Using mock proof to add authority set {}.",
-                current_authority_set_id
-            );
-            let prover_client = ProverClient::builder().mock().build().await;
-            let mock_pk = prover_client
-                .setup(Elf::Static(SP1_VECTOR_ELF))
-                .await
-                .expect("failed to setup mock prover");
-            let proof = prover_client.prove(&mock_pk, stdin).plonk().await?;
-            Ok(proof)
-        } else {
-            let spn = env::var("SP1_PROVER")?.to_lowercase() == "network";
-            return if spn {
-                info!(
-                    "Using spn proof to add authority set {}.",
-                    current_authority_set_id
-                );
-                let spn_client = ProverClient::builder().network().build().await;
-                let balance = spn_client.get_balance().await?;
-                info!(message = "Available balance", balance = balance.to_string());
+        self.prove(stdin, output).await
+    }
 
-                let network_pk = spn_client
-                    .setup(Elf::Static(SP1_VECTOR_ELF))
-                    .await
-                    .expect("failed to setup network prover");
-                let proof = spn_client
-                    .prove(&network_pk, stdin)
-                    .strategy(FulfillmentStrategy::Auction)
-                    .min_auction_period(10)
-                    .plonk()
-                    .timeout(Duration::from_secs(PROOF_TIMEOUT_SECS))
-                    .await;
-                proof
-            } else {
-                info!(
-                    "Using env defined client to add authority set {}.",
-                    current_authority_set_id
-                );
-                let proof = self.prover.prove(&self.pk, stdin).plonk().await;
-                proof
-            };
-        };
-        proof
+    async fn prove(&self, stdin: ZiskStdin, output: Vec<u8>) -> Result<VectorProof> {
+        let result = self
+            .prover
+            .prove(&self.program, stdin)
+            .wrap(ProofKind::Plonk)
+            .timeout(Duration::from_secs(PROOF_TIMEOUT_SECS))
+            .run()?
+            .await?;
+        let proof = result.get_proof();
+        proof.with_program_vk(&self.program.vk()?).verify()?;
+
+        let publics = proof.get_publics();
+        let mut committed_digest = [0u8; 32];
+        publics.read_slice(&mut committed_digest);
+        anyhow::ensure!(
+            committed_digest.as_slice() == Sha256::digest(&output).as_slice(),
+            "ZisK proof output does not match the requested statement"
+        );
+
+        let (proof_bytes, public_values) = plonk_calldata(proof)?;
+        Ok(VectorProof {
+            proof_bytes,
+            public_values,
+            output,
+        })
     }
 
     // Determine if a rotate is needed and request the proof if so. Returns Option<current_authority_set_id>.
@@ -556,7 +516,7 @@ where
 }
 
 ////////////////////////////////////////////////////////////
-// Control Flow & SP1
+// Control Flow & ZisK
 ////////////////////////////////////////////////////////////
 
 impl<P, N> SP1VectorOperator<P, N>
@@ -624,8 +584,9 @@ where
 
                         let tx = contract
                             .commitHeaderRange(
-                                proof.bytes().into(),
-                                proof.public_values.to_vec().into(),
+                                proof.proof_bytes.clone().into(),
+                                proof.public_values.clone().into(),
+                                proof.output.clone().into(),
                             )
                             .into_transaction_request();
 
@@ -741,7 +702,11 @@ where
                             .expect("No contract for chain id");
 
                         let tx = contract
-                            .rotate(proof.bytes().into(), proof.public_values.to_vec().into())
+                            .rotate(
+                                proof.proof_bytes.clone().into(),
+                                proof.public_values.clone().into(),
+                                proof.output.clone().into(),
+                            )
                             .into_transaction_request();
 
                         async move {
@@ -981,9 +946,7 @@ where
 
         let verifying_key = contract.vectorXProgramVkey().call().await?;
 
-        if verifying_key.0.to_vec()
-            != hex::decode(self.vk.bytes32().strip_prefix("0x").unwrap()).unwrap()
-        {
+        if verifying_key != self.vk {
             return Err(anyhow::anyhow!(
                 "The verifying key in the operator does not match the verifying key in the contract!"
             ));
@@ -1127,7 +1090,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run_with_signer(config: Vec<ChainConfig>) -> Result<()> {
-    let mut operator = SP1VectorOperator::new(SignerMode::Local).await;
+    let mut operator = SP1VectorOperator::new(SignerMode::Local).await?;
 
     let signer: PrivateKeySigner = env::var("PRIVATE_KEY")
         .expect("PRIVATE_KEY must be set")
@@ -1137,7 +1100,7 @@ async fn run_with_signer(config: Vec<ChainConfig>) -> Result<()> {
     for c in config {
         let provider = ProviderBuilder::new()
             .wallet(signer.clone())
-            .on_http(c.rpc_url.parse().expect("Failed to parse RPC URL"));
+            .connect_http(c.rpc_url.parse().expect("Failed to parse RPC URL"));
 
         operator = operator.with_chain(provider, c.vector_address).await;
     }
@@ -1146,11 +1109,11 @@ async fn run_with_signer(config: Vec<ChainConfig>) -> Result<()> {
 }
 
 async fn run_with_kms(config: Vec<ChainConfig>) -> Result<()> {
-    let mut operator = SP1VectorOperator::new(SignerMode::Kms).await;
+    let mut operator = SP1VectorOperator::new(SignerMode::Kms).await?;
 
     for c in config {
-        let provider =
-            ProviderBuilder::new().on_http(c.rpc_url.parse().expect("Failed to parse RPC URL"));
+        let provider = ProviderBuilder::new()
+            .connect_http(c.rpc_url.parse().expect("Failed to parse RPC URL"));
 
         operator = operator.with_chain(provider, c.vector_address).await;
     }

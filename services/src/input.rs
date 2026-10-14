@@ -500,6 +500,8 @@ impl RpcDataFetcher {
         let number_encoded = Compact(epoch_end_block).encode();
         // Skip past parent_hash, number, state_root, extrinsics_root.
         position += HASH_SIZE + number_encoded.len() + HASH_SIZE + HASH_SIZE;
+        // The offset points to the byte immediately before the selected digest item.
+        position += Compact(header.digest.logs.len() as u32).encode().len() - 1;
         let mut found_correct_log = false;
         for log in header.digest.logs {
             let encoded_log = log.clone().encode();
@@ -510,10 +512,6 @@ impl RpcDataFetcher {
                     match ConsensusLog::<u32>::decode(&mut value.as_slice()) {
                         Ok(ConsensusLog::ScheduledChange(_)) => {
                             println!("Found ScheduledChange log!");
-                            found_correct_log = true;
-                        }
-                        Ok(ConsensusLog::ForcedChange(_, _)) => {
-                            println!("Found ForcedChange log!");
                             found_correct_log = true;
                         }
                         _ => {
@@ -558,7 +556,9 @@ fn coingecko_price_endpoint(base_url: &str, from_token: &str, api_key: &str) -> 
     } else {
         "x_cg_demo_api_key"
     };
-    format!("{base_url}/v3/simple/price?ids={from_token}&vs_currencies=usd&{api_key_param}={api_key}")
+    format!(
+        "{base_url}/v3/simple/price?ids={from_token}&vs_currencies=usd&{api_key_param}={api_key}"
+    )
 }
 
 pub async fn fetch_usd_rate() -> Result<CoingekoApiResponse> {
