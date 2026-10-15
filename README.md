@@ -4,29 +4,31 @@ Vector brings Avail block-header commitments to an EVM chain. Starting from a tr
 
 ## What we completed
 
-- Ported the existing SP1 header-range and authority-rotation checks to a ZisK guest. GRANDPA votes are checked as Ed25519 signatures inside the guest.
-- Updated the operator to build ZisK inputs, execute the guest with Assembly, generate PLONK proofs with GPU acceleration, and relay the proofs and public output.
-- Connected the official ZisK Solidity verifier to the Vector contract and bound each proof to its output before state updates. The proxy contract remains named `SP1Vector` to preserve its upgrade and storage layout.
-- Rebuilt the revised guest with pinned ZisK `v1.3.2-alpha` and proved both paths on Girona: a real Avail header update and a synthetic authority rotation. Both proofs passed ZisK verification and the official Solidity verifier through `SP1Vector`.
+- Ported the existing SP1 header-range and authority-rotation checks to a ZisK guest. This guest checks GRANDPA Ed25519 signatures with ZisK's curve precompile.
+- Updated the operator to build ZisK inputs, execute the guest with Assembly, generate GPU proofs, and relay them with their public output. The full PLONK relay path was tested with the earlier 1.3 guest.
+- Connected the ZisK Solidity verifier to the Vector contract and bound each proof to its output before state updates. The proxy contract remains named `SP1Vector` to preserve its upgrade and storage layout.
+- Built the Ed25519 guest with pinned ZisK `1.4.0-alpha` source and generated GPU STARK proofs for both saved inputs on Girona.
 
-This branch builds a new guest with pinned ZisK `1.4.0-alpha` source. The proof fixtures and measurements below belong to the earlier `v1.3.2-alpha` guest; they do not verify the new ELF.
+The committed PLONK fixtures and Solidity verification results belong to the earlier `v1.3.2-alpha` guest; they do not verify this branch's ELF.
 
-The path is **Avail headers and validator votes → operator → ZisK guest → GPU proof → EVM verifier → Vector contract**. See [components](book/components.md), [reproducible builds](book/reproducible-builds.md), and [deployment](book/deployment.md) for details.
+The intended path is **Avail headers and validator votes → operator → ZisK guest → GPU proof → EVM verifier → Vector contract**. See [components](book/components.md), [reproducible builds](book/reproducible-builds.md), and [deployment](book/deployment.md) for details.
 
 ## Measured results
 
-Measurements used ZisK `v1.3.2-alpha` on Girona's RTX 5090. The header test used real Avail Turing data from block **4,007,140 to 4,007,141**, proving **one new block**. Its 3,504-byte input contains two 431-byte headers and a finality justification with **14 signed votes from 20 validators**. The configured Merkle tree has 512 slots, but only one new-block entry is populated; this is not a 512-block benchmark.
+Measurements used the pinned ZisK `1.4.0-alpha` guest, Assembly execution, and GPU STARK proving on Girona's RTX 5090. The real header input covers Avail Turing blocks **4,007,140 to 4,007,141**: one new block, with **14 signed votes from 20 validators**. The rotation input is a synthetic one-validator fixture.
 
 | Measurement | Real header update | Synthetic authority rotation |
 | --- | ---: | ---: |
-| ZisK guest steps (virtual instructions) | 10,832,220 | 767,823 |
-| Assembly guest execution | 19 ms | 8 ms |
-| GPU proof generation (STARK and PLONK) | **8.405 s** | **8.301 s** |
-| Estimated EVM relay transaction | **about 472,000 gas** | **about 399,000 gas** |
-| Contract calldata | 2,052 bytes | 2,052 bytes |
+| Input size | 3,504 bytes | 424 bytes |
+| ZisK guest steps (virtual instructions) | **548,231** | **23,339** |
+| Assembly guest execution | 28 ms | 5 ms |
+| GPU STARK proof generation | **6.880 s** | **6.728 s** |
+| STARK proof size | 415,232 bytes | 415,232 bytes |
 
-The rotation input is a signed test fixture with one validator, not a real Avail validator-set change. Its result demonstrates the proof and contract path, not production rotation performance. Each contract call carries a 768-byte proof within the 2,052 bytes of calldata. Gas estimates add transaction base and calldata to the measured Foundry contract calls (431,221 and 358,724 gas); they exclude deployment and chain-specific data fees. The prover allocated about 28.2 GB of GPU memory. These are ZisK measurements for the revised guest; no same-workload SP1 comparison or full 512-block batch has been measured.
+These are single runs. The header input contains two 431-byte headers; the configured Merkle tree has 512 slots, but only one new-block entry is populated. The prover allocated about 29.1 GB of GPU memory. The rotation result is not a production validator-set change.
 
-The committed [fixtures and reproduction steps](script/test_assets/README.md) include the real header input, both PLONK proofs, public outputs, and Solidity calldata.
+The earlier 1.3 guest used 10,832,220 header steps and 767,823 rotation steps. These 1.4 results are about 95% and 97% fewer steps, respectively; the change also includes a ZisK version upgrade.
+
+Both STARK proofs verified with a local diagnostic correction to the pinned 1.4 verifier's transcript challenge count. The unmodified verifier rejects them; matching PLONK proofs and Solidity verification are still outstanding. See [reproducible builds](book/reproducible-builds.md). The [committed PLONK fixtures](script/test_assets/README.md) remain tied to the earlier 1.3 guest. Its proof times include PLONK, so they are not directly comparable with the STARK times above. No same-workload SP1 comparison or full 512-block batch has been measured.
 
 This migration branch starts from [Avail's `v2.0.1` source](https://github.com/availproject/sp1-vector/tree/c649310e79de376926863504d49eddbf09532980). Each migration step is a separate commit on top of that version.
