@@ -1,4 +1,4 @@
-use ziskos::syscalls::{syscall_sha256_f, SyscallSha256Params};
+use ziskos::syscalls::syscall_sha256_f;
 
 const INITIAL_STATE: [u32; 8] = [
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -37,10 +37,7 @@ pub fn sha256_hash(input: &[u8]) -> [u8; 32] {
 fn compress(state: &mut [u64; 4], block: &[u8]) {
     let input =
         core::array::from_fn(|i| u64::from_le_bytes(block[i * 8..(i + 1) * 8].try_into().unwrap()));
-    syscall_sha256_f(&mut SyscallSha256Params {
-        state,
-        input: &input,
-    });
+    syscall_sha256_f(state, &input);
 }
 
 #[cfg(test)]
