@@ -9,6 +9,8 @@ Vector brings Avail block-header commitments to an EVM chain. Starting from a tr
 - Connected the official ZisK Solidity verifier to the Vector contract and bound each proof to its output before state updates. The proxy contract remains named `SP1Vector` to preserve its upgrade and storage layout.
 - Rebuilt the revised guest with pinned ZisK `v1.3.2-alpha` and proved both paths on Girona: a real Avail header update and a synthetic authority rotation. Both proofs passed ZisK verification and the official Solidity verifier through `SP1Vector`.
 
+This branch builds a new guest with pinned ZisK `1.4.0-alpha` source. The proof fixtures and measurements below belong to the earlier `v1.3.2-alpha` guest; they do not verify the new ELF.
+
 The path is **Avail headers and validator votes → operator → ZisK guest → GPU proof → EVM verifier → Vector contract**. See [components](book/components.md), [reproducible builds](book/reproducible-builds.md), and [deployment](book/deployment.md) for details.
 
 ## Measured results
