@@ -11,18 +11,6 @@ Vector brings Avail block-header commitments to an EVM chain. Starting from a tr
 
 The path is **Avail headers and validator votes → operator → ZisK guest → GPU proof → EVM verifier → Vector contract**. See [components](book/components.md), [reproducible builds](book/reproducible-builds.md), and [deployment](book/deployment.md) for details.
 
-## Precompile coverage
-
-| Guest operation | ZisK `v1.3.2-alpha` path |
-| --- | --- |
-| SHA-256 for Merkle nodes, authority commitments, and the public output digest | Local SHA-256 framing calls ZisK compression with aligned input words. |
-| BLAKE2b-256 for Avail header hashes | Header hashing calls ZisK's BLAKE2b round function. |
-| Ed25519 for GRANDPA votes | Software verification; this release has no Ed25519 precompile. |
-
-The hash paths pass native equivalence tests. The pinned guest ELF executes both saved inputs with Assembly and commits their expected digests. The included proofs and verification key match this ELF. See [reproducible builds](book/reproducible-builds.md).
-
-The [binding tests](contracts/test/ZiskBinding.t.sol) use a mock verifier to check rejection paths and state updates. The [real-proof tests](contracts/test/ZiskRealProof.t.sol) submit both committed PLONK proofs through the pinned official ZisK `v1.3.2-alpha` verifier and `SP1Vector`, then check the resulting state.
-
 ## Measured results
 
 Measurements used ZisK `v1.3.2-alpha` on Girona's RTX 5090. The header test used real Avail Turing data from block **4,007,140 to 4,007,141**, proving **one new block**. Its 3,504-byte input contains two 431-byte headers and a finality justification with **14 signed votes from 20 validators**. The configured Merkle tree has 512 slots, but only one new-block entry is populated; this is not a 512-block benchmark.
