@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 serde.workspace = true
-ed25519-consensus.workspace = true
 codec.workspace = true
 ziskos.workspace = true
 itertools.workspace = true
@@ -13,6 +12,7 @@ alloy-primitives = { version = "=1.5.7", features = ["serde"] }
 alloy-sol-types = { version = "=1.5.7" }
 
 [dev-dependencies]
+ed25519-consensus.workspace = true
 sha2.workspace = true
 blake2.workspace = true
 primitive-types = "0.12.2"

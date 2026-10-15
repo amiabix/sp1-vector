@@ -1,17 +1,37 @@
 use crate::{hash_encoded_header, types::CircuitJustification};
 use codec::Encode;
-use ed25519_consensus::{Signature, VerificationKey};
 use std::collections::{HashMap, HashSet};
+use ziskos::zisklib::{
+    add_points_ed25519, decompress_ed25519, double_scalar_mul_with_base_ed25519,
+    is_canonical_scalar_ed25519, is_small_order_ed25519, le_bytes_to_u64_4, neg_point_ed25519,
+    reduce_wide_scalar_ed25519, Sha512,
+};
 
 use alloy_primitives::B256;
 
-/// Verify that a Ed25519 signature is valid. Panics if the signature is not valid.
-fn verify_signature(pubkey_bytes: [u8; 32], signed_message: &[u8], signature: [u8; 64]) {
-    let pubkey: VerificationKey = VerificationKey::try_from(pubkey_bytes).unwrap();
-    let verified = pubkey.verify(&Signature::from(signature), signed_message);
-    if verified.is_err() {
-        panic!("Failed to verify Ed25519 signature.");
+/// ZIP-215 verification, matching Avail's existing Ed25519 consensus rule.
+fn verify_signature(pubkey_bytes: [u8; 32], signed_message: &[u8], signature: [u8; 64]) -> bool {
+    let r_bytes: [u8; 32] = signature[..32].try_into().unwrap();
+    let s = le_bytes_to_u64_4(signature[32..].try_into().unwrap());
+    if !is_canonical_scalar_ed25519(&s) {
+        return false;
     }
+    let (Some(a), Some(r)) = (
+        decompress_ed25519(&pubkey_bytes),
+        decompress_ed25519(&r_bytes),
+    ) else {
+        return false;
+    };
+
+    let mut h = Sha512::new();
+    h.update(&r_bytes);
+    h.update(&pubkey_bytes);
+    h.update(signed_message);
+    let k = reduce_wide_scalar_ed25519(&h.finalize());
+    let r_prime = double_scalar_mul_with_base_ed25519(&k, &neg_point_ed25519(&a), &s);
+
+    // ZIP-215 accepts R when R - R' has order dividing the cofactor (8).
+    is_small_order_ed25519(&add_points_ed25519(&r, &neg_point_ed25519(&r_prime)))
 }
 
 /// Confirm ancestry of a child block by traversing the ancestry_map until root_hash is reached.
@@ -75,7 +95,10 @@ pub fn verify_justification(justification: &CircuitJustification) {
             ));
 
             // Verify the signature is valid on the precommit, and panic if this is not the case.
-            verify_signature(p.pubkey.0, &signed_message, p.signature.0);
+            assert!(
+                verify_signature(p.pubkey.0, &signed_message, p.signature.0),
+                "Failed to verify Ed25519 signature."
+            );
 
             // Confirm the ancestry of the child block.
             let ancestry_confirmed =
@@ -100,4 +123,57 @@ pub fn verify_justification(justification: &CircuitJustification) {
         is_signed_by_supermajority(num_matched_addresses, justification.valset_pubkeys.len()),
         "More than 2/3 of signatures are not verifie!"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::verify_signature;
+    use ed25519_consensus::{Signature, SigningKey, VerificationKey};
+
+    fn assert_matches_consensus(pk: [u8; 32], msg: &[u8], sig: [u8; 64]) -> bool {
+        let expected = VerificationKey::try_from(pk)
+            .and_then(|key| key.verify(&Signature::from(sig), msg))
+            .is_ok();
+        assert_eq!(verify_signature(pk, msg, sig), expected);
+        expected
+    }
+
+    #[test]
+    fn signature_verification_matches_consensus() {
+        let signer = SigningKey::from([7u8; 32]);
+        let pk = signer.verification_key().to_bytes();
+        let msg = b"Avail GRANDPA precommit";
+        let sig = signer.sign(msg).to_bytes();
+        assert!(assert_matches_consensus(pk, msg, sig));
+        assert!(!assert_matches_consensus(pk, b"changed precommit", sig));
+
+        let mut noncanonical_s = sig;
+        noncanonical_s[63] = 0xff;
+        assert!(!assert_matches_consensus(pk, msg, noncanonical_s));
+    }
+
+    #[test]
+    fn accepts_zip215_noncanonical_identity() {
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let mut noncanonical_identity = [0xffu8; 32];
+        noncanonical_identity[0] = 0xee;
+        noncanonical_identity[31] = 0x7f;
+
+        let mut sig = [0u8; 64];
+        sig[..32].copy_from_slice(&noncanonical_identity);
+        assert!(assert_matches_consensus(identity, b"cofactor case", sig));
+        assert!(!ziskos::zisklib::ed25519_verify(
+            &identity,
+            b"cofactor case",
+            &sig
+        ));
+
+        sig[..32].copy_from_slice(&identity);
+        assert!(assert_matches_consensus(
+            noncanonical_identity,
+            b"noncanonical key",
+            sig
+        ));
+    }
 }
