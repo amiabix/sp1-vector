@@ -45,6 +45,8 @@ jobs:
     # Self-hosted runner: skip fork PRs (untrusted code); allow same-repo PRs, push, merge_group.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ${{ vars.BUILD_RUNNER || 'sp1-builder' }}
+    env:
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -61,6 +63,9 @@ jobs:
           ZISK_HOME: ${{ runner.temp }}/zisk-vector
           RUSTUP_HOME: ${{ runner.temp }}/zisk-rustup
         run: |
+          git clone https://github.com/0xPolygonHermez/zisk.git "$RUNNER_TEMP/zisk-source"
+          git -C "$RUNNER_TEMP/zisk-source" checkout fa82851b8707a6f2560fc96fd8e4f5acc406be1b
+          env -u RUSTUP_HOME cargo build --release --locked -p cargo-zisk --features cargo-zisk/cpu-only --manifest-path "$RUNNER_TEMP/zisk-source/Cargo.toml"
           cd program
-          "$ZISK_HOME/bin/cargo-zisk-cpu" build --release
+          "$RUNNER_TEMP/zisk-source/target/release/cargo-zisk" build --release
           cmp target/elf/riscv64ima-zisk-zkvm-elf/release/sp1-vectorx-program ../elf/vector-elf

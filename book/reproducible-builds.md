@@ -2,21 +2,22 @@
 
 The contract accepts proofs only for the verification key derived from the deployed guest ELF. Build and review the ELF before changing `ZISK_VECTOR_PROGRAM_VKEY`.
 
-The committed ELF includes the SHA-256 and BLAKE2b precompiles and the rotation digest-boundary check. It was built on Girona with the pinned `v1.3.2-alpha` builder and `zisk-4.0.0` Rust toolchain. The included verification key and proof fixtures were generated from this ELF and passed the ZisK and Solidity verifiers.
+The committed ELF was built on Girona from [ZisK source `fa82851`](https://github.com/0xPolygonHermez/zisk/tree/fa82851b8707a6f2560fc96fd8e4f5acc406be1b) with the `zisk-4.0.0` Rust toolchain. `Cargo.lock` pins the matching Proofman revision `a6ae24aa`. The CI ELF job rebuilds this source and compares its output byte for byte with the committed file.
 
-Install [ZisK](https://github.com/0xPolygonHermez/zisk/tree/v1.3.2-alpha) `v1.3.2-alpha` and its `zisk-4.0.0` Rust toolchain, matching the `zisk-sdk` and `ziskos` dependencies. Then run:
+On Linux, install the `zisk-4.0.0` toolchain with the `v1.3.2-alpha` installer, then build the pinned `1.4.0-alpha` guest builder:
 
 ```sh
+mkdir -p "$HOME/.zisk/bin"
+curl -fsSL https://github.com/0xPolygonHermez/zisk/releases/download/v1.3.2-alpha/cargo_zisk_linux_amd64.tar.gz | tar -xz -C "$HOME/.zisk"
+"$HOME/.zisk/bin/cargo-zisk-cpu" toolchain install --toolchain-version zisk-4.0.0
+git clone https://github.com/0xPolygonHermez/zisk.git ../zisk-source
+git -C ../zisk-source checkout fa82851b8707a6f2560fc96fd8e4f5acc406be1b
+cargo build --release --locked -p cargo-zisk --features cargo-zisk/cpu-only --manifest-path ../zisk-source/Cargo.toml
 cd program
-cargo-zisk build --release
-sha256sum target/elf/riscv64ima-zisk-zkvm-elf/release/sp1-vectorx-program
+../../zisk-source/target/release/cargo-zisk build --release
 cd ..
-# Compare the rebuilt ELF against the committed copy:
+sha256sum program/target/elf/riscv64ima-zisk-zkvm-elf/release/sp1-vectorx-program
 cmp program/target/elf/riscv64ima-zisk-zkvm-elf/release/sp1-vectorx-program elf/vector-elf
-# If deliberately updating the guest:
-cp program/target/elf/riscv64ima-zisk-zkvm-elf/release/sp1-vectorx-program elf/vector-elf
-cargo-zisk setup --elf elf/vector-elf --proving-key "$HOME/.zisk/provingKey"
-cargo run --release --bin vkey
 ```
 
-The committed ELF SHA-256 is `095e31138d9871c608db33e301b4331b8d511cec0befc1185d14c123bf268fb9`. Its program verification key is `0xf27b07410e8543b675c8091dfd4819b71e9f05328af9d2bfee4a30eda372a4e7`. The verifier's root commitment is `0x6b2490fba336fb00f0c8719a961de309a8db6f43a9bfb7575ca5f014d609b265`. The `setup` step creates the ROM verification-key artifact; `vkey` reads it. Build and proving toolchains, the ZisK verifier contract, and its root commitment must be from a mutually compatible ZisK release. Set the contract's program key to the new value before submitting these proofs.
+The committed ELF SHA-256 is `93d7b4aa32c2df3a97d513594d33e4ad286d407e8e2231417f91a50d39df9494`. The [included PLONK proofs](../script/test_assets/README.md) and their Solidity verifier remain tied to the previous `v1.3.2-alpha` ELF. A new proving-key setup, program verification key, PLONK proofs, and Solidity verification are required before this ELF can be deployed.
