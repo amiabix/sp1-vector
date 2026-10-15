@@ -21,7 +21,7 @@ The path is **Avail headers and validator votes → operator → ZisK guest → 
 
 The hash paths pass native equivalence tests. The pinned guest ELF executes both saved inputs with Assembly and commits their expected digests. The included proofs and verification key match this ELF. See [reproducible builds](book/reproducible-builds.md).
 
-The committed [Foundry tests](contracts/test/ZiskBinding.t.sol) use a mock verifier to check output binding and state updates. The included real proofs were also tested manually with the official ZisK `v1.3.2-alpha` verifier through `SP1Vector`; that integration test is not part of the committed test suite.
+The [binding tests](contracts/test/ZiskBinding.t.sol) use a mock verifier to check rejection paths and state updates. The [real-proof tests](contracts/test/ZiskRealProof.t.sol) submit both committed PLONK proofs through the pinned official ZisK `v1.3.2-alpha` verifier and `SP1Vector`, then check the resulting state.
 
 ## Measured results
 
